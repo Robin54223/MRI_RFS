@@ -1,0 +1,11 @@
+torch
+torchvision
+transformers
+numpy
+pandas
+scikit-learn
+nibabel
+lifelines
+matplotlib
+tqdm
+openpyxl
