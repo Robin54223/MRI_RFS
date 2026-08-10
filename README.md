@@ -82,11 +82,3 @@ python3 external_test.py \
 ```
 
 Evaluation outputs are saved under the directories configured in the evaluation command.
-
-## Notes for Public Release
-
-- Do not commit raw medical imaging data.
-- Do not commit trained `.pth` checkpoint files.
-- Do not commit cluster logs or generated result files.
-- Verify that your data usage agreement allows public release of the source code.
-- If you plan to open-source this project, add a license file before publishing.
