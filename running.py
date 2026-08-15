@@ -43,6 +43,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--step_size", type=int, default=5, help="StepLR step size")
     parser.add_argument("--gamma", type=float, default=0.1, help="StepLR gamma")
     parser.add_argument("--weight_decay", type=float, default=1e-5, help="Optimizer weight decay")
+    parser.add_argument(
+        "--report_dropout",
+        type=float,
+        default=0.2,
+        help="Sample-wise probability of replacing a report with an empty report during training",
+    )
     parser.add_argument("--device", type=str, default=None, help="Override device, e.g. cpu or cuda")
     return parser.parse_args()
 
@@ -152,13 +158,14 @@ class ImageNetBranch(nn.Module):
 class ReportNet(nn.Module):
     def __init__(self, radiobert_path: str):
         super().__init__()
-        self.encoder = RadioLOGIC(radiobert_path)
-        for param in self.encoder.parameters():
+        # Keep this attribute name aligned with the published checkpoint keys.
+        self.RadioLOGIC = RadioLOGIC(radiobert_path)
+        for param in self.RadioLOGIC.parameters():
             param.requires_grad = False
         self.projection = nn.Sequential(nn.Linear(768, 256), nn.ReLU(inplace=True))
 
     def forward(self, input_id: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        return self.projection(self.encoder(input_id, attention_mask))
+        return self.projection(self.RadioLOGIC(input_id, attention_mask))
 
 
 class ClinicalNet(nn.Module):
@@ -332,6 +339,28 @@ def unpack_batch(data: dict, device: torch.device) -> Tuple[torch.Tensor, torch.
     return image1, image2, input_id, mask, clin_features, label_cls
 
 
+def apply_report_modality_dropout(
+    input_id: torch.Tensor,
+    attention_mask: torch.Tensor,
+    probability: float,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Replace complete reports with empty inputs independently for each sample."""
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError("report_dropout must be between 0 and 1")
+    if probability == 0.0:
+        return input_id, attention_mask
+
+    dropped_samples = torch.rand(input_id.size(0), device=input_id.device) < probability
+    if not torch.any(dropped_samples):
+        return input_id, attention_mask
+
+    input_id = input_id.clone()
+    attention_mask = attention_mask.clone()
+    input_id[dropped_samples] = 0
+    attention_mask[dropped_samples] = 0
+    return input_id, attention_mask
+
+
 def train_one_epoch(
     model: nn.Module,
     dataloader,
@@ -339,6 +368,7 @@ def train_one_epoch(
     device: torch.device,
     epoch: int,
     num_epochs: int,
+    report_dropout: float,
 ) -> float:
     model.train()
     running_loss = 0.0
@@ -347,6 +377,7 @@ def train_one_epoch(
         if data is None:
             continue
         image1, image2, input_id, mask, clin_features, label_cls = unpack_batch(data, device)
+        input_id, mask = apply_report_modality_dropout(input_id, mask, report_dropout)
         optimizer.zero_grad()
         outputs = model(image1, image2, input_id, mask, clin_features)
         loss = sum(cal_loss(label_cls, outputs).values())
@@ -382,6 +413,8 @@ def evaluate(model: nn.Module, dataloader, device: torch.device) -> Tuple[Dict[i
 
 def main() -> None:
     args = parse_args()
+    if not 0.0 <= args.report_dropout <= 1.0:
+        raise ValueError("--report_dropout must be between 0 and 1")
     setup_seed(args.seed_t)
     device = resolve_device(args.device)
 
@@ -419,7 +452,15 @@ def main() -> None:
     print(f"checkpoint: {best_model_path}")
 
     for epoch in range(args.epochs):
-        train_loss = train_one_epoch(model, train_dataloader, optimizer, device, epoch, args.epochs)
+        train_loss = train_one_epoch(
+            model,
+            train_dataloader,
+            optimizer,
+            device,
+            epoch,
+            args.epochs,
+            args.report_dropout,
+        )
         scheduler.step()
 
         train_loss_dict, train_ci_dict, _ = evaluate(model, train_dataloader, device)
