@@ -15,5 +15,6 @@ python running.py \
   --lr_total "${LR_TOTAL:-1e-4}" \
   --lr_clin "${LR_CLIN:-1e-3}" \
   --lr_report "${LR_REPORT:-1e-4}" \
+  --report_dropout "${REPORT_DROPOUT:-0.2}" \
   --radiobert_path "${RADIOBERT_PATH}" \
   --output_dir "${OUTPUT_DIR:-./checkpoints}"

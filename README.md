@@ -1,26 +1,16 @@
-# mri-report-clinical-survival
+# MRI–report–clinical survival model
 
-This repository contains the `mri-report-clinical-survival` pipeline, a multimodal survival modeling project built from MRI volumes, radiology report text, and structured clinical features. The codebase has been cleaned up for GitHub publication by removing machine-specific paths and keeping data and model assets external to the repository.
+This repository implements a multimodal survival model that combines breast MRI volumes, radiology reports, and structured clinical features. The model uses a 3D ResNet image branch, a frozen RadioBERT semantic encoder, a clinical-feature branch, and two-stage Transformer fusion to predict recurrence risk.
 
-## Repository Status
+## Files
 
-- Hard-coded local and cluster paths were removed from the training workflow.
-- Configuration files now support environment variable overrides.
-- Generated artifacts and private assets are excluded through `.gitignore`.
-- Dependency installation is documented in `requirements.txt`.
-- Training and evaluation require external datasets and pretrained model files supplied by the user.
+- `running.py`: model definition and training entry point
+- `external_test.py`: internal and external cohort evaluation
+- `dataset_external.py`: data loading, preprocessing, and dataloader construction
+- `config.py` and `config_new.py`: dataset and runtime configuration
+- `MRI_Model.sh`: shell wrapper for training
 
-## Project Files
-
-- `running.py`: training entrypoint for the multimodal model
-- `external_test.py`: evaluation script for internal and external cohorts
-- `dataset_external.py`: dataset loading, preprocessing, and dataloader construction
-- `config.py` and `config_new.py`: runtime configuration with environment variable support
-- `MRI_Model.sh`: minimal shell wrapper for launching training
-
-## Requirements
-
-Create a virtual environment and install dependencies:
+## Installation
 
 ```bash
 python3 -m venv .venv
@@ -28,19 +18,26 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Required External Assets
+## Required assets
 
-Set these paths before training or evaluation:
+Configure the dataset and tokenizer paths with environment variables:
 
-- `DATASET_PATH`: root directory containing the MRI data
-- `META_PATH`: internal dataset metadata JSON file
-- `EXTERNAL_JSON_PATH`: external dataset directory
+- `DATASET_PATH`: MRI data root
+- `META_PATH`: internal-cohort metadata JSON
+- `EXTERNAL_JSON_PATH`: external-cohort data root
 - `TOKENIZER_PATH`: Hugging Face tokenizer name or local tokenizer directory
-- `--radiobert_path`: local path to the pretrained RadioBERT model
+
+The pretrained RadioBERT directory is passed with `--radiobert_path`. Download the updated [`checkpoint_01.pth`](https://github.com/Robin54223/MRI_RFS/releases/download/v1.0.0/checkpoint_01.pth) weights from the GitHub Release and supply the local file to the evaluation script with `--model_paths`.
+
+## Report-modality dropout and text-free inference
+
+The model is trained to support inference when a radiology report is unavailable. For each training sample, report-modality dropout is applied independently with probability 0.2. When selected, all report token IDs and the corresponding attention mask are set to zero; the MRI volumes and structured clinical inputs remain unchanged.
+
+The semantic branch is not removed or bypassed. The empty-report input follows the same frozen RadioBERT encoding and trainable projection pathway as a regular report, so the multimodal architecture is identical for report-present and report-absent samples. The probability can be changed with `--report_dropout`; use `0` to disable the strategy.
+
+For text-free external evaluation, pass `--text_free_external`. This applies the same empty-report representation by setting the external samples' report token IDs and attention masks to zero while retaining the semantic branch.
 
 ## Training
-
-Example:
 
 ```bash
 export DATASET_PATH=/path/to/data
@@ -52,6 +49,7 @@ python3 running.py \
   --name exp001 \
   --seed_t 2026 \
   --dropout 0.4 \
+  --report_dropout 0.2 \
   --lr_image 5e-4 \
   --lr_report 1e-4 \
   --lr_total 1e-4 \
@@ -60,11 +58,11 @@ python3 running.py \
   --output_dir ./checkpoints
 ```
 
-Training checkpoints are written to the directory passed through `--output_dir`.
+The best validation checkpoint and its run configuration are written to `--output_dir`.
 
 ## Evaluation
 
-Example:
+Evaluation with reports available:
 
 ```bash
 python3 external_test.py \
@@ -75,10 +73,16 @@ python3 external_test.py \
   --lr_image 5e-4 \
   --lr_report 1e-4 \
   --lr_total 1e-4 \
-  --model_paths ./checkpoints/exp001.pth \
+  --model_paths /path/to/checkpoint_01.pth \
   --radiobert_path /path/to/radiobert \
   --internal_json /path/to/internal_dataset.json \
   --external_json /path/to/external_dataset.json
 ```
 
-Evaluation outputs are saved under the directories configured in the evaluation command.
+To run the external cohort without report text, add:
+
+```bash
+  --text_free_external
+```
+
+Internal and external outputs are saved to `./results_internal` and `./results_external` by default. Use `--internal_output_dir` and `--external_output_dir` to change these locations.

@@ -126,6 +126,12 @@ def parse_args() -> argparse.Namespace:
         help="Directory to save external evaluation results",
     )
 
+    parser.add_argument(
+        "--text_free_external",
+        action="store_true",
+        help="Evaluate the external cohort with report token IDs and attention masks set to zero",
+    )
+
     return parser.parse_args()
 
 
@@ -245,9 +251,10 @@ class ImageNetBranch(nn.Module):
 class ReportNet(nn.Module):
     def __init__(self, radiobert_path: str):
         super().__init__()
-        self.radiologic_encoder = RadioLOGIC(radiobert_path)
+        # Keep this attribute name aligned with the published checkpoint keys.
+        self.RadioLOGIC = RadioLOGIC(radiobert_path)
 
-        for param in self.radiologic_encoder.parameters():
+        for param in self.RadioLOGIC.parameters():
             param.requires_grad = False
 
         self.projection = nn.Sequential(
@@ -256,7 +263,7 @@ class ReportNet(nn.Module):
         )
 
     def forward(self, input_id: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        outputs = self.radiologic_encoder(input_id, attention_mask)
+        outputs = self.RadioLOGIC(input_id, attention_mask)
         outputs = self.projection(outputs)
         return outputs
 
@@ -584,6 +591,7 @@ def collect_predictions(
     model: nn.Module,
     dl: DataLoader,
     device: torch.device,
+    empty_report: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, List[str], List[torch.Tensor], List[Tuple[str, torch.Tensor]], List[Tuple[int, int, int, torch.Tensor]]]:
     pred_all = None
     y_all = None
@@ -604,6 +612,9 @@ def collect_predictions(
 
             mask = report_code["attention_mask"][:, 0, :].long().to(device)
             input_id = report_code["input_ids"][:, 0, :].long().to(device)
+            if empty_report:
+                input_id = torch.zeros_like(input_id)
+                mask = torch.zeros_like(mask)
 
             pred = model(image1, image2, input_id, mask, clin_features)
             y_batch = label_cls
@@ -841,6 +852,7 @@ def evaluate_single_dataloader(
     cycles_date: str,
     fixed_median: Optional[torch.Tensor] = None,
     include_scores: bool = False,
+    empty_report: bool = False,
 ) -> None:
     ensure_dir(output_dir)
 
@@ -850,7 +862,12 @@ def evaluate_single_dataloader(
     print("------------------------------------------------")
     print("------------------------------------------------")
 
-    pred_all, y_all, _, pres, data_pre, data_roc = collect_predictions(model, dl, device=device)
+    pred_all, y_all, _, pres, data_pre, data_roc = collect_predictions(
+        model,
+        dl,
+        device=device,
+        empty_report=empty_report,
+    )
 
     ci_dict = cal_ci_test(y_all, pred_all, device=device)
 
@@ -973,6 +990,7 @@ def main() -> None:
             cycles_date=args.name,
             fixed_median=None,
             include_scores=True,
+            empty_report=args.text_free_external,
         )
 
 
